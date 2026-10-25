@@ -1,0 +1,66 @@
+name: 检查
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 每周确认安装脚本仍能拿到最新 Release。
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  skill:
+    name: skill 格式
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: SKILL.md 有 name 和 description
+        run: |
+          python3 - <<'PY'
+          import re, sys
+          text = open("skills/apple-pickup-watcher/SKILL.md", encoding="utf-8").read()
+          m = re.match(r"---\n(.*?)\n---\n", text, re.S)
+          if not m:
+              sys.exit("SKILL.md 缺少 frontmatter")
+          fields = dict(line.split(": ", 1) for line in m.group(1).splitlines())
+          assert fields.get("name") == "apple-pickup-watcher", fields
+          assert 0 < len(fields.get("description", "")) <= 1024, "description 为空或过长"
+          print("ok")
+          PY
+      - name: shellcheck
+        run: shellcheck skills/apple-pickup-watcher/scripts/install-apw.sh
+
+  install:
+    name: 安装脚本（${{ matrix.os }}）
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装并运行 apw（macOS / Linux）
+        if: runner.os != 'Windows'
+        run: |
+          set -eu
+          path=$(APW_INSTALL_DIR="$RUNNER_TEMP/apw" sh skills/apple-pickup-watcher/scripts/install-apw.sh)
+          "$path" schema | python3 -c "import json,sys; assert json.load(sys.stdin)['schemaVersion'] == 1"
+          "$path" regions | python3 -c "import json,sys; assert len(json.load(sys.stdin)['regions']) > 0"
+          # 版本号不存在时必须失败，且什么都不装。
+          if APW_VERSION=v0.0.0 APW_INSTALL_DIR="$RUNNER_TEMP/none" sh skills/apple-pickup-watcher/scripts/install-apw.sh; then exit 1; fi
+          test ! -e "$RUNNER_TEMP/none/apw"
+      - name: 安装并运行 apw（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:APW_INSTALL_DIR = "$env:RUNNER_TEMP\apw"
+          $path = (powershell -ExecutionPolicy Bypass -File skills\apple-pickup-watcher\scripts\install-apw.ps1 | Select-Object -Last 1)
+          if ($LASTEXITCODE -ne 0) { throw "安装失败" }
+          $schema = & $path schema | ConvertFrom-Json
+          if ($schema.schemaVersion -ne 1) { throw "schemaVersion 不对" }
+          $regions = & $path regions | ConvertFrom-Json
+          if ($regions.regions.Count -lt 1) { throw "没有地区" }

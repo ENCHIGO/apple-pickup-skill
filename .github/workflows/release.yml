@@ -1,0 +1,23 @@
+name: 发布
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  zip:
+    name: 打包 skill
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 打包并发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd skills
+          zip -r ../apple-pickup-watcher.zip apple-pickup-watcher
+          cd ..
+          gh release create "$GITHUB_REF_NAME" apple-pickup-watcher.zip --title "$GITHUB_REF_NAME" --generate-notes
